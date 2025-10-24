@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">EchoAI</string>
+    
+    <!-- Dashboard -->
+    <string name="dashboard_no_meetings">No meetings yet</string>
+    <string name="dashboard_start_recording">Start a recording</string>
+    <string name="dashboard_generate_summary">Generate Summary</string>
+    <string name="dashboard_meeting_title">Meeting - %1$s</string>
+    <string name="dashboard_duration">Duration: %1$s</string>
+
+    <!-- Recording -->
+    <string name="recording_stop">Stop</string>
+    <string name="recording_pause">Pause</string>
+    <string name="recording_resume">Resume</string>
+    <string name="recording_status_recording">Recording...</string>
+    <string name="recording_status_paused">Paused - %1$s</string>
+    <string name="recording_status_stopped">Stopped</string>
+    <string name="recording_status_error">Error: %1$s</string>
+    <string name="recording_status_warning">Warning: %1$s</string>
+
+    <!-- Summary -->
+    <string name="summary_generate">Generate Summary</string>
+
+    <!-- Accessibility -->
+    <string name="cd_start_recording">Start new recording</string>
+    <string name="cd_stop_recording">Stop Recording</string>
+    <string name="cd_pause_recording">Pause Recording</string>
+    <string name="cd_resume_recording">Resume Recording</string>
+</resources>
