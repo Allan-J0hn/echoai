@@ -14,3 +14,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# JetBrains/Android Studio
+.idea/
+*.iml
+.gradle/
+local.properties
