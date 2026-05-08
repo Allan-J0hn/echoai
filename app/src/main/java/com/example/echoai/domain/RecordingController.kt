@@ -6,6 +6,8 @@ import com.example.echoai.di.IoDispatcher
 import com.example.echoai.service.PauseReason
 import com.example.echoai.utils.SilenceDetector
 import com.example.echoai.utils.SilenceEvent
+import com.example.echoai.utils.StorageGuard
+import com.example.echoai.workers.TranscriptionCoordinator
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +23,8 @@ class RecordingController @Inject constructor(
     private val chunker: OverlapChunker,
     private val repository: RecordingRepository,
     private val sessionStateRepository: SessionStateRepository,
+    private val transcriptionCoordinator: TranscriptionCoordinator,
+    private val storageGuard: StorageGuard,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     private val silenceDetector: SilenceDetector
 ) {
@@ -37,6 +41,8 @@ class RecordingController @Inject constructor(
 
     private var timerJob: Job? = null
     private var currentSessionId: Long? = null
+    private var audioCaptureRunning = false
+    private var chunkerRunning = false
 
     // New state variables for robust timekeeping
     private var startRealtimeMs: Long = 0L
@@ -86,6 +92,7 @@ class RecordingController @Inject constructor(
                 repository.addAudioChunk(
                     AudioChunk(sessionId = sessionId, index = chunkIndex, filePath = filePath, durationSec = 30)
                 )
+                transcriptionCoordinator.enqueueOnChunkClosed(sessionId, chunkIndex, filePath)
             }
         }
     }
@@ -93,7 +100,15 @@ class RecordingController @Inject constructor(
     fun start() {
         scope.launch {
             gate.withLock {
-                if (_recordingStatus.value is RecordingStatus.Recording) return@withLock
+                if (_recordingStatus.value is RecordingStatus.Recording || _recordingStatus.value is RecordingStatus.Warning) {
+                    recoverCaptureIfNeededLocked()
+                    return@withLock
+                }
+                if (_recordingStatus.value is RecordingStatus.Paused) {
+                    resumeLocked()
+                    return@withLock
+                }
+                if (!hasRecordingSpaceLocked()) return@withLock
 
                 val newSessionId = repository.createNewSession()
                 currentSessionId = newSessionId
@@ -121,35 +136,7 @@ class RecordingController @Inject constructor(
                     _elapsedMillis.value
                 )
 
-                chunker.start(newSessionId, 0)
-                startTimer()
-                silenceDetector.reset() // Reset silence detector on new recording
-                try {
-                    audioEngine.start(scope) { data ->
-                        chunker.onData(data)
-                        when (silenceDetector.onData(data)) {
-                            SilenceEvent.SilentFor10s -> {
-                                if (_recordingStatus.value !is RecordingStatus.Warning) {
-                                    _recordingStatus.value = RecordingStatus.Warning("No audio detected – Check microphone.")
-                                    Timber.w("SilenceDetector: No audio detected – Check microphone.")
-                                }
-                            }
-                            SilenceEvent.SoundResumed -> {
-                                if (_recordingStatus.value is RecordingStatus.Warning) {
-                                    _recordingStatus.value = RecordingStatus.Recording
-                                    Timber.d("SilenceDetector: Sound resumed, clearing warning.")
-                                }
-                            }
-                            SilenceEvent.NoChange -> { /* do nothing */ }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Audio engine failed to start")
-                    _recordingStatus.value = RecordingStatus.Error("Audio engine failed")
-                    audioEngine.stop()
-                    chunker.stop()
-                    timerJob?.cancel()
-                }
+                startCaptureLocked(newSessionId, nextChunkIndex = 0, failureAction = "start")
             }
         }
     }
@@ -157,11 +144,17 @@ class RecordingController @Inject constructor(
     fun stop() {
         scope.launch {
             gate.withLock {
+                val sessionId = currentSessionId
                 audioEngine.stop()
-                chunker.stop()
+                audioCaptureRunning = false
+                if (chunkerRunning) {
+                    chunker.stop()
+                    chunkerRunning = false
+                }
                 timerJob?.cancel()
-                currentSessionId?.let {
+                sessionId?.let {
                     repository.finishSession(it)
+                    enqueueSummaryIfReady(it)
                 }
                 _recordingStatus.value = RecordingStatus.Stopped
                 _elapsedMillis.value = 0L
@@ -209,6 +202,7 @@ class RecordingController @Inject constructor(
                         ))
                     }
                     audioEngine.stop()
+                    audioCaptureRunning = false
                     timerJob?.cancel()
                     Timber.d("Controller State (Pause): status=%s now=%d start=%d lastResumed=%s acc=%d elapsed=%d",
                         _recordingStatus.value.javaClass.simpleName,
@@ -225,60 +219,154 @@ class RecordingController @Inject constructor(
 
     suspend fun resume() {
         gate.withLock {
-            if (_recordingStatus.value is RecordingStatus.Paused) {
-                lastResumedRealtimeMs = SystemClock.elapsedRealtime()
-                _recordingStatus.value = RecordingStatus.Recording
-                currentSessionId?.let { sessionId ->
-                    val session = repository.getSessionWithChunks(sessionId)
-                    val lastChunkIndex = session?.chunks?.lastOrNull()?.index ?: 0
-                    sessionStateRepository.save(SessionState(
-                        sessionId,
-                        session?.session?.startTime ?: System.currentTimeMillis(),
-                        lastChunkIndex,
-                        SessionStatus.RECORDING,
-                        startRealtimeMs,
-                        accumulatedElapsedMs,
-                        lastResumedRealtimeMs
-                    ))
-                }
-                startTimer()
-                silenceDetector.reset() // Reset silence detector on resume
-                try {
-                    audioEngine.start(scope) { data -> 
-                        chunker.onData(data)
-                        when (silenceDetector.onData(data)) {
-                            SilenceEvent.SilentFor10s -> {
-                                if (_recordingStatus.value !is RecordingStatus.Warning) {
-                                    _recordingStatus.value = RecordingStatus.Warning("No audio detected – Check microphone.")
-                                    Timber.w("SilenceDetector: No audio detected – Check microphone.")
-                                }
-                            }
-                            SilenceEvent.SoundResumed -> {
-                                if (_recordingStatus.value is RecordingStatus.Warning) {
-                                    _recordingStatus.value = RecordingStatus.Recording
-                                    Timber.d("SilenceDetector: Sound resumed, clearing warning.")
-                                }
-                            }
-                            SilenceEvent.NoChange -> { /* do nothing */ }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Audio engine failed to resume")
-                    _recordingStatus.value = RecordingStatus.Error("Audio engine failed")
-                    audioEngine.stop()
-                    chunker.stop()
-                    timerJob?.cancel()
-                }
-                Timber.d("Controller State (Resume): status=%s now=%d start=%d lastResumed=%s acc=%d elapsed=%d",
-                    _recordingStatus.value.javaClass.simpleName,
-                    SystemClock.elapsedRealtime(),
-                    startRealtimeMs,
-                    lastResumedRealtimeMs,
-                    accumulatedElapsedMs,
-                    _elapsedMillis.value
-                )
+            resumeLocked()
+        }
+    }
+
+    private suspend fun resumeLocked() {
+        if (_recordingStatus.value !is RecordingStatus.Paused) return
+        if (!hasRecordingSpaceLocked()) return
+
+        val sessionId = currentSessionId ?: return
+        val session = repository.getSessionWithChunks(sessionId)
+        val nextChunkIndex = nextChunkIndexForSession(sessionId)
+
+        lastResumedRealtimeMs = SystemClock.elapsedRealtime()
+        _recordingStatus.value = RecordingStatus.Recording
+        sessionStateRepository.save(SessionState(
+            sessionId,
+            session?.session?.startTime ?: System.currentTimeMillis(),
+            nextChunkIndex,
+            SessionStatus.RECORDING,
+            startRealtimeMs,
+            accumulatedElapsedMs,
+            lastResumedRealtimeMs
+        ))
+
+        startCaptureLocked(sessionId, nextChunkIndex, failureAction = "resume")
+        Timber.d("Controller State (Resume): status=%s now=%d start=%d lastResumed=%s acc=%d elapsed=%d",
+            _recordingStatus.value.javaClass.simpleName,
+            SystemClock.elapsedRealtime(),
+            startRealtimeMs,
+            lastResumedRealtimeMs,
+            accumulatedElapsedMs,
+            _elapsedMillis.value
+        )
+    }
+
+    private suspend fun recoverCaptureIfNeededLocked() {
+        if (audioCaptureRunning) return
+        if (!hasRecordingSpaceLocked()) return
+
+        val sessionId = currentSessionId ?: return
+        val session = repository.getSessionWithChunks(sessionId)
+        val nextChunkIndex = nextChunkIndexForSession(sessionId)
+
+        if (lastResumedRealtimeMs == null) {
+            lastResumedRealtimeMs = SystemClock.elapsedRealtime()
+        }
+        sessionStateRepository.save(SessionState(
+            sessionId,
+            session?.session?.startTime ?: System.currentTimeMillis(),
+            nextChunkIndex,
+            SessionStatus.RECORDING,
+            startRealtimeMs,
+            accumulatedElapsedMs,
+            lastResumedRealtimeMs
+        ))
+
+        startCaptureLocked(sessionId, nextChunkIndex, failureAction = "recover")
+        Timber.d("Controller State (Recover): status=%s now=%d start=%d lastResumed=%s acc=%d elapsed=%d",
+            _recordingStatus.value.javaClass.simpleName,
+            SystemClock.elapsedRealtime(),
+            startRealtimeMs,
+            lastResumedRealtimeMs,
+            accumulatedElapsedMs,
+            _elapsedMillis.value
+        )
+    }
+
+    private suspend fun nextChunkIndexForSession(sessionId: Long): Int {
+        val dbNextIndex = (repository.getSessionWithChunks(sessionId)?.chunks?.maxOfOrNull { it.index } ?: -1) + 1
+        val stateNextIndex = sessionStateRepository.get()?.lastChunkIndex ?: 0
+        return maxOf(dbNextIndex, stateNextIndex, 0)
+    }
+
+    private fun startCaptureLocked(sessionId: Long, nextChunkIndex: Int, failureAction: String) {
+        if (!chunkerRunning) {
+            chunker.start(sessionId, nextChunkIndex)
+            chunkerRunning = true
+        }
+        startTimer()
+        silenceDetector.reset()
+        try {
+            audioEngine.start(
+                scope = scope,
+                onBytes = { data -> handleAudioData(data) },
+                onError = { throwable -> handleAudioEngineError(throwable) }
+            )
+            audioCaptureRunning = true
+        } catch (e: Exception) {
+            Timber.e(e, "Audio engine failed to %s", failureAction)
+            markAudioCaptureFailedLocked()
+        }
+    }
+
+    private fun handleAudioEngineError(throwable: Throwable) {
+        scope.launch {
+            gate.withLock {
+                Timber.e(throwable, "Audio engine failed while recording")
+                markAudioCaptureFailedLocked()
             }
         }
+    }
+
+    private fun markAudioCaptureFailedLocked() {
+        _recordingStatus.value = RecordingStatus.Error("Audio engine failed")
+        audioEngine.stop()
+        audioCaptureRunning = false
+        if (chunkerRunning) {
+            chunker.stop()
+            chunkerRunning = false
+        }
+        timerJob?.cancel()
+    }
+
+    private fun handleAudioData(data: ByteArray) {
+        chunker.onData(data)
+        when (silenceDetector.onData(data)) {
+            SilenceEvent.SilentFor10s -> {
+                if (_recordingStatus.value !is RecordingStatus.Warning) {
+                    _recordingStatus.value = RecordingStatus.Warning("No audio detected – Check microphone.")
+                    Timber.w("SilenceDetector: No audio detected – Check microphone.")
+                }
+            }
+            SilenceEvent.SoundResumed -> {
+                if (_recordingStatus.value is RecordingStatus.Warning) {
+                    _recordingStatus.value = RecordingStatus.Recording
+                    Timber.d("SilenceDetector: Sound resumed, clearing warning.")
+                }
+            }
+            SilenceEvent.NoChange -> { /* do nothing */ }
+        }
+    }
+
+    private suspend fun enqueueSummaryIfReady(sessionId: Long) {
+        val session = repository.getSessionWithChunks(sessionId) ?: return
+        if (session.session.status == SessionStatus.STOPPED &&
+            session.chunks.isNotEmpty() &&
+            session.chunks.all { it.transcribed }
+        ) {
+            transcriptionCoordinator.enqueueGenerateSummary(sessionId)
+        }
+    }
+
+    private fun hasRecordingSpaceLocked(): Boolean {
+        if (storageGuard.hasSpace(MIN_RECORDING_BYTES_NEEDED)) return true
+
+        _recordingStatus.value = RecordingStatus.Error("Not enough storage to record.")
+        timerJob?.cancel()
+        return false
     }
 
     private fun startTimer() {
@@ -290,5 +378,9 @@ class RecordingController @Inject constructor(
                 delay(100)
             }
         }
+    }
+
+    private companion object {
+        private const val MIN_RECORDING_BYTES_NEEDED = 1_000_000L
     }
 }

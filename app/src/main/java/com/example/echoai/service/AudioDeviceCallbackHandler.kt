@@ -13,20 +13,32 @@ class AudioDeviceCallbackHandler @Inject constructor(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioDeviceCallback: AudioDeviceCallback? = null
 
-    fun register(callback: (AudioDeviceInfo?) -> Unit) {
+    fun register(callback: (Boolean) -> Unit) {
         audioDeviceCallback = object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                callback(addedDevices?.firstOrNull { it.isSource })
+                if (addedDevices?.any { it.isSource } == true) {
+                    callback(true)
+                }
             }
 
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                callback(null)
+                if (removedDevices?.any { it.isSource } == true) {
+                    callback(hasInputDevice())
+                }
             }
         }
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+        callback(hasInputDevice())
     }
 
     fun unregister() {
         audioDeviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
+        audioDeviceCallback = null
+    }
+
+    fun hasInputDevice(): Boolean {
+        return audioManager
+            .getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .any { it.isSource }
     }
 }

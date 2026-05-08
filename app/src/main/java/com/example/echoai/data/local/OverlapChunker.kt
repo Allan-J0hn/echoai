@@ -1,7 +1,6 @@
 package com.example.echoai.data.local
 
 import android.content.Context
-import com.example.echoai.workers.TranscriptionCoordinator
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.RandomAccessFile
@@ -11,8 +10,7 @@ import javax.inject.Inject
 import kotlin.math.min
 
 class OverlapChunker @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val transcriptionCoordinator: TranscriptionCoordinator
+    @ApplicationContext private val context: Context
 ) {
     private var onChunkClosed: ((Long, Int, String, Long) -> Unit)? = null
 
@@ -86,7 +84,7 @@ class OverlapChunker @Inject constructor(
         val fileName = "${currentSessionId}_${String.format("%05d", chunkIndex)}.wav"
         val file = File(sessionDir, fileName)
         currentFile = file
-        chunkFile = RandomAccessFile(file, "rw")
+        chunkFile = RandomAccessFile(file, "rw").apply { setLength(0) }
         chunkFile?.let { writeWavHeader(it) }
         bytesWritten = 0
     }
@@ -111,7 +109,6 @@ class OverlapChunker @Inject constructor(
 
         val absolutePath = fileToClose.absolutePath
         onChunkClosed?.invoke(currentSessionId, chunkIndex, absolutePath, System.currentTimeMillis())
-        transcriptionCoordinator.enqueueOnChunkClosed(currentSessionId, chunkIndex, absolutePath)
         chunkIndex++
 
         this.chunkFile = null

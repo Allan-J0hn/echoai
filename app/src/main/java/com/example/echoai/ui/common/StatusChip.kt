@@ -9,7 +9,7 @@ import com.example.echoai.data.local.SummaryStatus
 @Composable
 fun SessionStatusChip(status: SessionStatus) {
     AssistChip(
-        onClick = { /*TODO*/ },
+        onClick = { },
         label = { Text(text = status.name.replace('_', ' ')) }
     )
 }
@@ -17,7 +17,7 @@ fun SessionStatusChip(status: SessionStatus) {
 @Composable
 fun SummaryStatusChip(status: SummaryStatus) {
     AssistChip(
-        onClick = { /*TODO*/ },
+        onClick = { },
         label = { Text(text = status.name.replace('_', ' ')) }
     )
 }

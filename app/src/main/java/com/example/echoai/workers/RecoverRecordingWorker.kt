@@ -2,6 +2,7 @@ package com.example.echoai.workers
 
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -24,7 +25,7 @@ class RecoverRecordingWorker @AssistedInject constructor(
             val intent = Intent(appContext, RecordingForegroundService::class.java).apply {
                 action = RecordingForegroundService.ACTION_START
             }
-            appContext.startService(intent)
+            ContextCompat.startForegroundService(appContext, intent)
         }
         return Result.success()
     }

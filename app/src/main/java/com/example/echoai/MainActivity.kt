@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -48,11 +50,14 @@ class MainActivity : ComponentActivity() {
                     val notifPermsState = if (wantsNotifications)
                         rememberMultiplePermissionsState(listOf(Manifest.permission.POST_NOTIFICATIONS))
                     else null
+                    LaunchedEffect(micGranted, notifPermsState?.allPermissionsGranted) {
+                        if (micGranted && notifPermsState?.allPermissionsGranted == false) {
+                            notifPermsState.launchMultiplePermissionRequest()
+                        }
+                    }
 
                     if (micGranted) {
                         EchoAiNavHost()
-                        // Optionally, request notifications in-app somewhere else (snackbar/banner),
-                        // but never block dashboard on it.
                     } else {
                         PermissionScreen(
                             // Only request RECORD_AUDIO here
@@ -75,7 +80,7 @@ fun EchoAiNavHost() {
                     val intent = Intent(navController.context, RecordingForegroundService::class.java).apply {
                         action = RecordingForegroundService.ACTION_START
                     }
-                    navController.context.startService(intent)
+                    ContextCompat.startForegroundService(navController.context, intent)
                     navController.navigate("recording")
                 },
                 onSessionClick = { sessionId ->

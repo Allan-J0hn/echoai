@@ -6,6 +6,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.example.echoai.data.local.SessionStatus
 import com.example.echoai.data.local.Summary
 import com.example.echoai.data.local.SummaryStatus
 import com.example.echoai.data.summary.SummaryDataSource
@@ -43,6 +44,14 @@ class GenerateSummaryWorker @AssistedInject constructor(
                     error = null
                 )
             )
+
+            val sessionWithChunks = recordingRepository.getSessionWithChunks(sessionId)
+                ?: return@withContext Result.failure()
+            val hasPendingTranscription = sessionWithChunks.chunks.any { !it.transcribed }
+            if (sessionWithChunks.session.status != SessionStatus.STOPPED || hasPendingTranscription) {
+                Log.d("SummaryWorker", "Session is not ready for summary; retrying.")
+                return@withContext Result.retry()
+            }
 
             val transcriptLines = recordingRepository.getTranscriptLinesForSession(sessionId)
             

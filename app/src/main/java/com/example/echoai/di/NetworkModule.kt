@@ -12,6 +12,7 @@ import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import javax.inject.Provider
 import javax.inject.Singleton
 
 @Module
@@ -28,8 +29,12 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(okHttpClient: OkHttpClient): Retrofit {
+        val baseUrl = BuildConfig.TRANSCRIBE_URL.trim()
+        require(baseUrl.isNotEmpty()) { "TRANSCRIBE_URL is required for remote transcription." }
+        val normalizedBaseUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+
         return Retrofit.Builder()
-            .baseUrl(BuildConfig.TRANSCRIBE_URL)
+            .baseUrl(normalizedBaseUrl)
             .client(okHttpClient)
             .addConverterFactory(MoshiConverterFactory.create())
             .build()
@@ -44,11 +49,11 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideTranscriptionDataSource(
-        transcriptionApi: TranscriptionApi,
+        transcriptionApiProvider: Provider<TranscriptionApi>,
         mockTranscriptionDataSource: MockTranscriptionDataSource
     ): TranscriptionDataSource {
-        return if (BuildConfig.TRANSCRIBE_URL.isNotEmpty() && BuildConfig.TRANSCRIBE_KEY.isNotEmpty()) {
-            RemoteTranscriptionDataSource(transcriptionApi)
+        return if (BuildConfig.TRANSCRIBE_URL.isNotBlank() && BuildConfig.TRANSCRIBE_KEY.isNotBlank()) {
+            RemoteTranscriptionDataSource(transcriptionApiProvider.get())
         } else {
             mockTranscriptionDataSource
         }

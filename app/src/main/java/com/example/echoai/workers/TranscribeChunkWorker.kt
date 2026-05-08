@@ -5,9 +5,10 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.example.echoai.data.local.SessionStatus
+import com.example.echoai.data.local.TranscriptLine
 import com.example.echoai.data.remote.TranscriptionDataSource
 import com.example.echoai.domain.RecordingRepository
-import com.example.echoai.data.local.TranscriptLine
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,8 @@ class TranscribeChunkWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val transcriptionDataSource: TranscriptionDataSource,
-    private val recordingRepository: RecordingRepository
+    private val recordingRepository: RecordingRepository,
+    private val transcriptionCoordinator: TranscriptionCoordinator
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -54,9 +56,20 @@ class TranscribeChunkWorker @AssistedInject constructor(
             )
             recordingRepository.markChunkUploaded(sessionId, chunkIndex, true)
             recordingRepository.markChunkTranscribed(sessionId, chunkIndex, true)
+            enqueueSummaryIfReady(sessionId)
             Result.success()
         } catch (e: Exception) {
             Result.retry()
+        }
+    }
+
+    private suspend fun enqueueSummaryIfReady(sessionId: Long) {
+        val session = recordingRepository.getSessionWithChunks(sessionId) ?: return
+        if (session.session.status == SessionStatus.STOPPED &&
+            session.chunks.isNotEmpty() &&
+            session.chunks.all { it.transcribed }
+        ) {
+            transcriptionCoordinator.enqueueGenerateSummary(sessionId)
         }
     }
 

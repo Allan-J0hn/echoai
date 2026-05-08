@@ -26,6 +26,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
@@ -43,25 +44,59 @@ class RecordingForegroundService : Service(), AudioManager.OnAudioFocusChangeLis
     @Inject
     lateinit var telephonyHandler: TelephonyHandler
 
+    @Inject
+    lateinit var audioDeviceCallbackHandler: AudioDeviceCallbackHandler
+
     private val notificationManager by lazy { getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
-    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(Dispatchers.Main.immediate + serviceJob)
     private var statusJob: Job? = null
     private var notificationTextJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        observeAudioDevices()
         observeStatus()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    notificationManager.notify(
+                        NOTIFICATION_ID,
+                        createNotification("Microphone permission is required.", "Error: EchoAI", RecordingStatus.Error("Missing microphone permission"))
+                    )
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
+                startForeground(
+                    NOTIFICATION_ID,
+                    createNotification("Starting recording...", "EchoAI", RecordingStatus.Recording)
+                )
+
                 if (audioFocusHandler.requestAudioFocus(this)) {
+                    if (!audioDeviceCallbackHandler.hasInputDevice()) {
+                        notificationManager.notify(
+                            NOTIFICATION_ID,
+                            createNotification("No microphone input is available.", "Error: EchoAI", RecordingStatus.Error("No microphone input"))
+                        )
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
                     if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
                         telephonyHandler.register { state -> onCallStateChanged(state) }
                     }
                     recordingController.start()
+                } else {
+                    notificationManager.notify(
+                        NOTIFICATION_ID,
+                        createNotification("Could not get audio focus.", "Error: EchoAI", RecordingStatus.Error("Audio focus denied"))
+                    )
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
             }
             ACTION_PAUSE -> recordingController.pause(PauseReason.USER)
@@ -84,6 +119,7 @@ class RecordingForegroundService : Service(), AudioManager.OnAudioFocusChangeLis
                         notificationManager.notify(NOTIFICATION_ID, createNotification(text, "EchoAI", status))
                     }
                     is RecordingStatus.Stopped -> {
+                        stopForegroundCompat()
                         stopSelf()
                     }
                     is RecordingStatus.Error -> {
@@ -95,6 +131,17 @@ class RecordingForegroundService : Service(), AudioManager.OnAudioFocusChangeLis
                         observeElapsedTime() 
                     }
                 }
+            }
+        }
+    }
+
+    private fun observeAudioDevices() {
+        audioDeviceCallbackHandler.register { hasInputDevice ->
+            val status = recordingController.recordingStatus.value
+            if (!hasInputDevice && (status is RecordingStatus.Recording || status is RecordingStatus.Warning)) {
+                recordingController.pause(PauseReason.AUDIO_DEVICE)
+            } else if (hasInputDevice && status is RecordingStatus.Paused && status.reason == PauseReason.AUDIO_DEVICE) {
+                serviceScope.launch { recordingController.resume() }
             }
         }
     }
@@ -129,14 +176,18 @@ class RecordingForegroundService : Service(), AudioManager.OnAudioFocusChangeLis
     }
 
     override fun onDestroy() {
+        val status = recordingController.recordingStatus.value
         statusJob?.cancel()
         notificationTextJob?.cancel()
         audioFocusHandler.abandonAudioFocus()
         telephonyHandler.unregister()
-        if (recordingController.recordingStatus.value is RecordingStatus.Recording || recordingController.recordingStatus.value is RecordingStatus.Warning) {
+        audioDeviceCallbackHandler.unregister()
+        if (status is RecordingStatus.Recording || status is RecordingStatus.Warning || status is RecordingStatus.Paused) {
+            recordingController.stop()
             val workRequest = OneTimeWorkRequestBuilder<FinalizeSessionWorker>().build()
             WorkManager.getInstance(this).enqueue(workRequest)
         }
+        serviceJob.cancel()
         super.onDestroy()
     }
 
@@ -162,6 +213,15 @@ class RecordingForegroundService : Service(), AudioManager.OnAudioFocusChangeLis
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Recording Service", NotificationManager.IMPORTANCE_LOW)
             notificationManager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
         }
     }
 

@@ -1,7 +1,6 @@
 package com.example.echoai.data.local
 
 import android.content.Context
-import com.example.echoai.workers.TranscriptionCoordinator
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -20,8 +19,6 @@ class OverlapChunkerTest {
 
     @Mock
     private lateinit var mockContext: Context
-    @Mock
-    private lateinit var mockTranscriptionCoordinator: TranscriptionCoordinator
 
     private lateinit var overlapChunker: OverlapChunker
     private val fakeSessionId = 123L
@@ -31,7 +28,7 @@ class OverlapChunkerTest {
         val tempDir = tempFolder.newFolder()
         whenever(mockContext.filesDir).thenReturn(tempDir)
         
-        overlapChunker = OverlapChunker(mockContext, mockTranscriptionCoordinator)
+        overlapChunker = OverlapChunker(mockContext)
     }
 
     @Test
@@ -53,7 +50,6 @@ class OverlapChunkerTest {
         overlapChunker.stop()
 
         verify(onChunkClosedCallback).invoke(eq(fakeSessionId), eq(0), any(), any())
-        verify(mockTranscriptionCoordinator).enqueueOnChunkClosed(eq(fakeSessionId), eq(0), any())
     }
 
     @Test
@@ -65,6 +61,5 @@ class OverlapChunkerTest {
         overlapChunker.stop()
 
         verify(onChunkClosedCallback, never()).invoke(any(), any(), any(), any())
-        verify(mockTranscriptionCoordinator, never()).enqueueOnChunkClosed(any(), any(), any())
     }
 }
