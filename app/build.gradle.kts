@@ -10,17 +10,17 @@ plugins {
 }
 
 android {
-    namespace = "com.example.echoai"
+    namespace = "com.echoai.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.echoai"
+        applicationId = "com.echoai.app"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
-        testInstrumentationRunner = "com.example.echoai.HiltTestRunner"
+        testInstrumentationRunner = "com.echoai.app.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }

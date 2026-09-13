@@ -1,0 +1,10 @@
+## Copy this file to local.properties and fill in your own values.
+## local.properties is gitignored and never committed.
+
+sdk.dir=/path/to/your/Android/Sdk
+
+## Optional: point the app at a real transcription API instead of the built-in
+## mock pipeline. Leave these unset (or blank) to keep using mock transcription
+## and summaries, which is the default for this project.
+TRANSCRIBE_URL=https://api.example.com/
+TRANSCRIBE_KEY=sk-echoai-demo-xxxxxxxx

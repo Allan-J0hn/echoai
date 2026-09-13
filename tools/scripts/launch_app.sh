@@ -1,2 +1,2 @@
 #!/bin/bash
-adb shell am start -n com.example.echoai/.MainActivity
+adb shell am start -n com.echoai.app/.MainActivity

@@ -20,3 +20,9 @@ local.properties
 *.iml
 .gradle/
 local.properties
+
+# AI tooling — never commit assistant config/state
+.claude/
+CLAUDE.md
+.codex/
+.agents/

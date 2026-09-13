@@ -1,2 +1,2 @@
 #!/bin/bash
-adb shell am force-stop com.example.echoai
+adb shell am force-stop com.echoai.app

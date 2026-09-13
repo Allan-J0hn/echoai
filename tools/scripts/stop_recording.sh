@@ -1,2 +1,2 @@
 #!/bin/bash
-adb shell am startservice -a com.example.echoai.service.STOP com.example.echoai/.service.RecordingForegroundService
+adb shell am startservice -a com.echoai.app.service.STOP com.echoai.app/.service.RecordingForegroundService
